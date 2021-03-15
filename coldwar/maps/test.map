@@ -1,0 +1,24 @@
+~ a test map file
+~ order: scale, vertices, then colors, then color verts
+
+s 1.0
+
+v
+0.0 0.0 0.0 0.0 0.0
+0.0 0.5 0.5 0.0 0.0
+0.0 0.5 0.5 0.7 0.0
+0.0 0.0 0.7 1.0 0.0
+0.0 0.0 0.0 0.0 0.0
+
+d
+grass 0.416 0.502 0.0 1.0
+earth 0.302 0.251 0.0 1.0
+snow 1.0 1.0 1.0 1.0
+
+c
+earth earth earth earth earth
+earth grass grass earth earth
+earth grass grass grass earth
+earth earth grass snow earth
+earth earth earth earth earth
+

@@ -1,0 +1,72 @@
+#version 460 core
+
+const uint blockiness_per_dim = 16; // number of vec4's consumed per local workgroup before being stored in ssbo
+
+layout (local_size_x = blockiness_per_dim, local_size_y = blockiness_per_dim) in;
+
+layout (rgba8, binding = 0) coherent restrict uniform image2D depth_color;
+
+layout (std430, binding = 0) buffer min_max_buffer {
+	vec2 val[]; // x is min, y is max
+};
+
+// TODO:
+// 1. clean up the code
+// 4. find out a better way to draw grey - need more bits!
+// (drawing to a FB directly forces us to use RGBA8 instead of something more appropriate!)
+
+shared vec2 intermed_buffer[blockiness_per_dim * blockiness_per_dim];
+
+void main() {
+	const uint num_items = gl_WorkGroupSize.x * gl_NumWorkGroups.x;
+	const uint total_items = gl_WorkGroupSize.x * gl_NumWorkGroups.x * gl_WorkGroupSize.y * gl_NumWorkGroups.y;
+	const uint thread_buffer_id = gl_GlobalInvocationID.y * num_items + gl_GlobalInvocationID.x;
+	const uint local_buffer_id = gl_LocalInvocationID.y * blockiness_per_dim + gl_LocalInvocationID.x;
+
+	vec4 depth_data = imageLoad(depth_color, ivec2(gl_GlobalInvocationID.xy));
+	intermed_buffer[local_buffer_id].x = depth_data.x;
+	if (depth_data.y < 1.0) {
+		intermed_buffer[local_buffer_id].y = depth_data.y;
+	} else {
+		intermed_buffer[local_buffer_id].y = 0.0;
+	}
+	
+	// do a prepass using shared memory to cut down on global memory bandwidth
+	for (uint mid = intermed_buffer.length() / 2; mid > 0; mid /= 2) {
+		barrier();
+		if (local_buffer_id < mid) {
+			intermed_buffer[local_buffer_id].x = min(intermed_buffer[local_buffer_id].x, intermed_buffer[local_buffer_id + mid].x);
+			intermed_buffer[local_buffer_id].y = max(intermed_buffer[local_buffer_id].y, intermed_buffer[local_buffer_id + mid].y);
+		}
+	}
+	
+	barrier();
+	
+	if (local_buffer_id == 0) {
+		val[thread_buffer_id] = intermed_buffer[0];
+	}
+
+	// find the minimum and maximum values in the image
+	for (uint mid = total_items / 2; mid > 0; mid /= 2) {
+		barrier();
+		if (thread_buffer_id < mid && local_buffer_id == 0) {
+			val[thread_buffer_id].x = min(val[thread_buffer_id].x, val[thread_buffer_id + mid].x);
+			val[thread_buffer_id].y = max(val[thread_buffer_id].y, val[thread_buffer_id + mid].y);
+		}
+	}
+
+	barrier();
+	
+	// find a 1st order equation that scales [0, 1] to the discovered min and max values
+	const float min = val[0].x;
+	const float max = val[0].y;
+
+	const mat2 scale_mat = mat2(min, max,
+								1.0, 1.0);
+	
+	vec2 scale_vals = inverse(scale_mat) * vec2(0.0, 1.0);
+	float readjusted_depth = clamp(clamp(depth_data.x, min, max) * scale_vals.x + scale_vals.y, 0.0, 1.0);
+	
+	// write out modified value to image!
+	imageStore(depth_color, ivec2(gl_GlobalInvocationID.xy), vec4(readjusted_depth));
+}
